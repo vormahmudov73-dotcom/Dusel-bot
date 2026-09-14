@@ -1,1 +1,950 @@
 
+import os
+import json
+import time
+import sqlite3
+import urllib.request
+import urllib.parse
+import urllib.error
+import logging
+import signal
+import sys
+
+# ============================================================
+# DUSEL 12-DOKON — TELEGRAM SHOP BOT
+# 24/7-ready version
+#
+# IMPORTANT:
+# 1) Do NOT put your Telegram token directly into this file.
+# 2) Set the environment variable BOT_TOKEN on your server.
+# 3) Set ADMIN_ID if your admin Telegram ID is different.
+#
+# Example:
+#   BOT_TOKEN=123456:ABCDEF...
+#   ADMIN_ID=6033308194
+#
+# This bot uses only Python standard library.
+# No external pip packages are required.
+# ============================================================
+
+TOKEN = "8914759604:AAGwNjkU6HpfnkGfjKwZ4oAJqEmw2GYzcxM"
+ADMIN_ID = int(os.getenv("ADMIN_ID", "6033308194"))
+
+if not TOKEN:
+    print("XATO: BOT_TOKEN environment variable berilmagan.")
+    print("Masalan: export BOT_TOKEN='SIZNING_YANGI_TOKENINGIZ'")
+    sys.exit(1)
+
+API = "https://api.telegram.org/bot" + TOKEN + "/"
+
+DB_FILE = os.getenv("DB_FILE", "dusel_bot.db")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+# ============================================================
+# MAHSULOTLAR
+# ============================================================
+
+PRODUCTS = {
+    # Brend bo'limlari: eski barcha mahsulotlar DUSEL ichida.
+    "dusel_led": [
+        ("Dusel LED 5W", 0.55),
+        ("Dusel LED 7W", 0.65),
+        ("Dusel LED 10W", 0.70),
+        ("Dusel LED 12W", 0.80),
+        ("Dusel LED 15W", 0.95),
+        ("Dusel LED 18W", 1.10),
+        ("Dusel LED 20W", 1.30),
+        ("Dusel LED 30W", 2.10),
+        ("Dusel LED 40W", 2.90),
+        ("Dusel LED 50W", 3.70),
+        ("Dusel LED 60W", 4.30),
+        ("Dusel LED 80W", 6.00),
+        ("Dusel LED 100W", 8.00),
+        ("Dusel LED 150W", 11.00),
+        ("Dusel LED 200W", 19.00),
+        ("Dusel LED Flame Lamp", 1.90)
+    ],
+
+    "dusel_patron": [
+        ("Dusel LED C30/E14 5W", 0.60),
+        ("Dusel LED C30/E27 5W", 0.60),
+        ("Dusel LED C35/E14 7W", 0.65),
+        ("Dusel LED C35/E27 7W", 0.65),
+        ("Dusel LED C40/E14 9W", 0.70),
+        ("Dusel LED C40/E27 9W", 0.70),
+        ("Dusel LED G45/E14 5W", 0.65),
+        ("Dusel LED B45/E27 5W", 0.65)
+    ]
+,
+    "veral_led": [
+        ("Veral LED 5W",0.41),("Veral LED 7W",0.50),("Veral LED 10W",0.54),("Veral LED 12W",0.61),("Veral LED 15W",0.72),("Veral LED 18W",0.95),("Veral LED 20W",1.00),("Veral LED 30W",1.45),("Veral LED 40W",2.05),("Veral LED 50W",2.50),("Veral LED 60W",3.10)
+    ],
+    "veral_lyustra": [
+        ("LED 5W C30/E14",0.55),("LED 5W C30/E27",0.55),("Candle 9W E14",0.70),("Candle 12W E14",0.75),("Candle 16W E14",0.60),("Candle 16W E27",0.60),("LED candle 12W E14 Small",0.55),("Candle 14W E14,E27 (3 color)",0.80),("Candle 18W E14,E27 (3 color)",0.90),("Candle 24W E27,E14",1.10),("LED Candle-2 12W E14",1.00)
+    ],
+    "veral_square_inside": [("VAS-10 (10W - Ichki)",0.89),("VAS-18 (18W - Ichki)",1.12),("VAS-24 (24W - Ichki)",1.69),("VAS-36 (36W - Ichki)",2.72),("VAS-48 (48W - Ichki)",4.75)],
+    "veral_round_inside": [("VAR-10 (10W - Ichki)",0.78),("VAR-18 (18W - Ichki)",1.02),("VAR-24 (24W - Ichki)",1.58),("VAR-36 (36W - Ichki)",2.26),("VAR-48 (48W - Ichki)",4.30)],
+    "veral_square_outside": [("VASS-18 (18W - Tashqi)",1.37),("VASS-24 (24W - Tashqi)",2.05),("VASS-36 (36W - Tashqi)",2.90),("VASS-48 (48W - Tashqi)",5.00)],
+    "veral_round_outside": [("VASR-18 (18W - Tashqi)",1.26),("VASR-24 (24W - Tashqi)",1.85),("VASR-36 (36W - Tashqi)",2.73),("VASR-48 (48W - Tashqi)",4.52)]
+
+}
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+db = sqlite3.connect(DB_FILE, check_same_thread=False)
+db.execute("""
+CREATE TABLE IF NOT EXISTS carts (
+    chat_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    price REAL NOT NULL,
+    qty INTEGER NOT NULL
+)
+""")
+db.commit()
+
+db.execute("""
+CREATE TABLE IF NOT EXISTS clients (
+    chat_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+""")
+db.execute("""
+CREATE TABLE IF NOT EXISTS order_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    price REAL NOT NULL,
+    qty INTEGER NOT NULL,
+    total REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+""")
+db.commit()
+
+db.execute("""
+CREATE TABLE IF NOT EXISTS saved_list (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    price REAL NOT NULL,
+    qty INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+""")
+db.commit()
+
+selected = {}
+orders = {}
+registration = {}
+running = True
+
+
+def get_client(chat_id):
+    return db.execute(
+        "SELECT chat_id, name, phone FROM clients WHERE chat_id = ?",
+        (chat_id,)
+    ).fetchone()
+
+
+def save_client(chat_id, name, phone):
+    db.execute(
+        "INSERT OR REPLACE INTO clients (chat_id, name, phone) VALUES (?, ?, ?)",
+        (chat_id, name, phone)
+    )
+    db.commit()
+
+
+def save_order_history(chat_id, items):
+    for item in items:
+        total = item["price"] * item["qty"]
+        db.execute(
+            "INSERT INTO order_history (chat_id, name, price, qty, total) VALUES (?, ?, ?, ?, ?)",
+            (chat_id, item["name"], item["price"], item["qty"], total)
+        )
+    db.commit()
+
+
+def save_to_list(chat_id, items):
+    for item in items:
+        db.execute(
+            "INSERT INTO saved_list (chat_id, name, price, qty) VALUES (?, ?, ?, ?)",
+            (chat_id, item["name"], item["price"], item["qty"])
+        )
+    db.commit()
+
+
+def saved_list_items(chat_id):
+    return db.execute(
+        "SELECT name, price, qty, created_at FROM saved_list WHERE chat_id = ? ORDER BY id DESC",
+        (chat_id,)
+    ).fetchall()
+
+
+def client_history(chat_id):
+    return db.execute(
+        "SELECT name, price, qty, total, created_at FROM order_history WHERE chat_id = ? ORDER BY id DESC",
+        (chat_id,)
+    ).fetchall()
+
+
+def client_list_keyboard():
+    return {"inline_keyboard":[
+        [{"text":"MIJOZLAR","callback_data":"admin_clients"}],
+        [{"text":"BOSH MENU","callback_data":"home"}]
+    ]}
+
+
+def my_list_keyboard():
+    return {"inline_keyboard":[
+        [{"text":"🛒 SAVATCHA","callback_data":"cart"}],
+        [{"text":"MAHSULOTLAR","callback_data":"categories"}],
+        [{"text":"BOSH MENU","callback_data":"home"}]
+    ]}
+
+
+def admin_client_list():
+    rows = db.execute(
+        "SELECT chat_id, name, phone FROM clients ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+    buttons = []
+    for chat_id, name, phone in rows:
+        label = (name[:28] + "...") if len(name) > 31 else name
+        buttons.append([{"text": label + " | " + phone, "callback_data":"admin_client_" + str(chat_id)}])
+    buttons.append([{"text":"BOSH MENU","callback_data":"home"}])
+    return {"inline_keyboard": buttons}
+
+
+def admin_client_detail(chat_id):
+    row = get_client(chat_id)
+    if not row:
+        return "Mijoz topilmadi.", client_list_keyboard()
+    _, name, phone = row
+    history = client_history(chat_id)
+    text = "MIJOZ\n\nIsm: " + name + "\nTelefon: " + phone + "\n\nSPISKA:\n"
+    if not history:
+        text += "Hozircha zakaz yo‘q."
+    else:
+        total_all = 0
+        for item_name, price, qty, total, created in history[:30]:
+            total_all += total
+            text += "\n" + item_name + "\n" + str(qty) + " dona — $" + format(total, ".2f") + "\n" + created + "\n"
+        text += "\nJAMI: $" + format(total_all, ".2f")
+    return text, {"inline_keyboard":[
+        [{"text":"MIJOZLAR","callback_data":"admin_clients"}],
+        [{"text":"BOSH MENU","callback_data":"home"}]
+    ]}
+
+def my_list(chat_id):
+    row = get_client(chat_id)
+    if not row:
+        return "Siz hali registratsiyadan o‘tmagansiz."
+    _, name, phone = row
+    history = client_history(chat_id)
+    saved = saved_list_items(chat_id)
+    text = "MENING SPISKAM\n\n" + name + "\n" + phone + "\n"
+    if saved:
+        text += "\nSAQLANGAN SPISKA:\n"
+        for item_name, price, qty, created in saved[:30]:
+            text += "\n" + item_name + "\n" + str(qty) + " dona — $" + format(price * qty, ".2f") + "\n"
+    if history:
+        text += "\nBUYURTMALAR TARIXI:\n"
+        total_all = 0
+        for item_name, price, qty, total, created in history[:30]:
+            total_all += total
+            text += "\n" + item_name + "\n" + str(qty) + " dona — $" + format(total, ".2f") + "\n" + created + "\n"
+    if not saved and not history:
+        text += "\nHozircha spiska bo‘sh."
+    return text
+
+
+def cart_items(chat_id):
+    rows = db.execute(
+        "SELECT name, price, qty FROM carts WHERE chat_id = ?",
+        (chat_id,)
+    ).fetchall()
+
+    return [
+        {
+            "name": row[0],
+            "price": row[1],
+            "qty": row[2]
+        }
+        for row in rows
+    ]
+
+
+def add_cart_item(chat_id, name, price, qty):
+    db.execute(
+        "INSERT INTO carts (chat_id, name, price, qty) VALUES (?, ?, ?, ?)",
+        (chat_id, name, price, qty)
+    )
+    db.commit()
+
+
+def clear_cart(chat_id):
+    db.execute(
+        "DELETE FROM carts WHERE chat_id = ?",
+        (chat_id,)
+    )
+    db.commit()
+
+
+# ============================================================
+# TELEGRAM API
+# ============================================================
+
+def api(method, data=None):
+    if data is None:
+        data = {}
+
+    encoded = urllib.parse.urlencode(data).encode("utf-8")
+
+    request = urllib.request.Request(
+        API + method,
+        data=encoded,
+        headers={
+            "User-Agent": "DUSEL-12-DOKON-BOT/1.0"
+        }
+    )
+
+    with urllib.request.urlopen(request, timeout=35) as response:
+        raw = response.read().decode("utf-8")
+
+    result = json.loads(raw)
+
+    if not result.get("ok"):
+        raise RuntimeError(
+            "Telegram API xatosi: " + str(result)
+        )
+
+    return result
+
+
+def send(chat_id, text, keyboard=None):
+    data = {
+        "chat_id": chat_id,
+        "text": text
+    }
+
+    if keyboard:
+        data["reply_markup"] = json.dumps(
+            keyboard,
+            ensure_ascii=False
+        )
+
+    return api("sendMessage", data)
+
+
+def edit(chat_id, message_id, text, keyboard):
+    data = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "reply_markup": json.dumps(
+            keyboard,
+            ensure_ascii=False
+        )
+    }
+
+    return api("editMessageText", data)
+
+
+# ============================================================
+# MENULAR
+# ============================================================
+
+def main_menu(chat_id=None):
+    rows = [
+        [{"text": "MAHSULOTLAR", "callback_data": "categories"}],
+        [{"text": "🛒 SAVATCHA", "callback_data": "cart"}],
+        [{"text": "MENING SPISKAM", "callback_data": "my_list"}]
+    ]
+    if chat_id == ADMIN_ID:
+        rows.append([{"text": "MIJOZLAR", "callback_data": "admin_clients"}])
+    return {"inline_keyboard": rows}
+
+
+def categories(chat_id=None):
+    rows = [
+        [{"text":"DUSEL","callback_data":"brand_dusel"},{"text":"VERAL","callback_data":"brand_veral"}],
+        [{"text":"SALID","callback_data":"brand_salid"}],
+        [{"text":"🛒 SAVATCHA","callback_data":"cart"}],
+        [{"text":"MENING SPISKAM","callback_data":"my_list"}]
+    ]
+    if chat_id == ADMIN_ID:
+        rows.append([{ "text":"MIJOZLAR", "callback_data":"admin_clients"}])
+    rows.append([{ "text":"BOSH MENU", "callback_data":"home"}])
+    return {"inline_keyboard": rows}
+
+
+def dusel_categories():
+    return {"inline_keyboard":[[{"text":"LED LAMPALAR","callback_data":"cat_led"}],[{"text":"PATRONLI LAMPALAR","callback_data":"cat_patron"}],[{"text":"BRENDLAR","callback_data":"categories"}]]}
+
+def veral_categories():
+    return {"inline_keyboard":[
+        [{"text":"LED LAMPALAR","callback_data":"veral_led"}],
+        [{"text":"LYUSTRA LAMPALAR","callback_data":"veral_lyustra"}],
+        [{"text":"TO‘RT BURCHAK ICHKI AKRIL","callback_data":"veral_square_inside"}],
+        [{"text":"DUMALOQ ICHKI AKRIL","callback_data":"veral_round_inside"}],
+        [{"text":"TO‘RT BURCHAK TASHQI AKRIL","callback_data":"veral_square_outside"}],
+        [{"text":"DUMALOQ TASHQI AKRIL","callback_data":"veral_round_outside"}],
+        [{"text":"BRENDLAR","callback_data":"categories"}]
+    ]}
+
+
+def product_keyboard(category, back_callback="brand_dusel", back_text="BO‘LIMLAR"):
+    buttons=[]
+    for i,(name,price) in enumerate(PRODUCTS[category]):
+        buttons.append([{"text":name+" — $"+format(price,".2f"),"callback_data":"product_"+category+"_"+str(i)}])
+    buttons.append([{"text":"🛒 SAVATCHA","callback_data":"cart"}])
+    buttons.append([{"text":back_text,"callback_data":back_callback}])
+    return {"inline_keyboard":buttons}
+
+
+def cart_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text":"✅ ZAKAZNI TASDIQLASH","callback_data":"checkout"}],
+            [{"text":"📝 SPISKAGA QO‘SHISH","callback_data":"save_to_list"}],
+            [{"text":"➕ YANA MAHSULOT","callback_data":"categories"}],
+            [{"text":"🗑 SAVATCHANI TOZALASH","callback_data":"clear"}]
+        ]
+    }
+
+# ============================================================
+# SIGNAL / TO'XTATISH
+# ============================================================
+
+def stop_bot(signum=None, frame=None):
+    global running
+    logging.info("Bot to'xtatilmoqda...")
+    running = False
+
+
+signal.signal(signal.SIGINT, stop_bot)
+signal.signal(signal.SIGTERM, stop_bot)
+
+
+# ============================================================
+# CALLBACK HANDLER
+# ============================================================
+
+def handle_callback(update):
+    callback = update["callback_query"]
+
+    callback_id = callback["id"]
+    message = callback.get("message")
+
+    if not message:
+        api(
+            "answerCallbackQuery",
+            {"callback_query_id": callback_id}
+        )
+        return
+
+    chat_id = message["chat"]["id"]
+    message_id = message["message_id"]
+    data = callback.get("data", "")
+
+    api(
+        "answerCallbackQuery",
+        {
+            "callback_query_id": callback_id
+        }
+    )
+
+    if data == "admin_clients":
+        if chat_id != ADMIN_ID:
+            return
+        edit(chat_id, message_id, "MIJOZLAR\n\nMijozni tanlang:", admin_client_list())
+
+    elif data.startswith("admin_client_"):
+        if chat_id != ADMIN_ID:
+            return
+        try:
+            client_id = int(data[len("admin_client_"):])
+        except ValueError:
+            return
+        text, keyboard = admin_client_detail(client_id)
+        edit(chat_id, message_id, text, keyboard)
+
+    elif data == "my_list":
+        send(chat_id, my_list(chat_id), my_list_keyboard())
+
+    elif data == "home":
+        edit(
+            chat_id,
+            message_id,
+            " DUSEL 12-DOKON\n\n"
+            "Kerakli bo‘limni tanlang:",
+            main_menu(chat_id)
+        )
+
+    elif data == "categories":
+        edit(
+            chat_id,
+            message_id,
+            " MAHSULOTLAR\n\n"
+            " Kategoriyani tanlang:",
+            categories(chat_id)
+        )
+
+    elif data == "brand_dusel":
+        edit(
+            chat_id,
+            message_id,
+            " DUSEL\n\n Bo‘limni tanlang:",
+            dusel_categories()
+        )
+
+    elif data == "brand_veral":
+        edit(chat_id,message_id,"VERAL\n\nBo‘limni tanlang:",veral_categories())
+
+    elif data == "brand_salid":
+        edit(
+            chat_id,
+            message_id,
+            " SALID\n\nHozircha mahsulotlar qo‘shilmagan.",
+            {"inline_keyboard": [[{"text": "⬅ BRENDLAR", "callback_data": "categories"}]]}
+        )
+
+    elif data == "cat_led":
+        edit(
+            chat_id,
+            message_id,
+            " LED LAMPALAR\n\n"
+            "Mahsulotni tanlang:",
+            product_keyboard("dusel_led")
+        )
+
+    elif data == "cat_patron":
+        edit(
+            chat_id,
+            message_id,
+            " PATRONLI LAMPALAR\n\n"
+            "Mahsulotni tanlang:",
+            product_keyboard("dusel_patron")
+        )
+
+    elif data.startswith("product_"):
+        parts = data.rsplit("_", 1)
+
+        if len(parts) != 2 or not parts[0].startswith("product_"):
+            return
+
+        category = parts[0][len("product_"):]
+
+        try:
+            index = int(parts[1])
+        except ValueError:
+            return
+
+        if category not in PRODUCTS:
+            return
+
+        if index < 0 or index >= len(PRODUCTS[category]):
+            return
+
+        name = PRODUCTS[category][index][0]
+        price = PRODUCTS[category][index][1]
+
+        selected[chat_id] = {
+            "name": name,
+            "price": price
+        }
+
+        send(
+            chat_id,
+            " " + name +
+            "\n\n Narxi: $" +
+            format(price, ".2f") +
+            "\n\n Nechta kerak?\n"
+            "Masalan: 5\n\n"
+            " Faqat sonini yozing."
+        )
+
+    elif data in {"veral_led","veral_lyustra","veral_square_inside","veral_round_inside","veral_square_outside","veral_round_outside"}:
+        titles={"veral_led":"VERAL LED LAMPALAR","veral_lyustra":"VERAL LYUSTRA LAMPALAR","veral_square_inside":"TO‘RT BURCHAK ICHKI AKRIL","veral_round_inside":"DUMALOQ ICHKI AKRIL","veral_square_outside":"TO‘RT BURCHAK TASHQI AKRIL","veral_round_outside":"DUMALOQ TASHQI AKRIL"}
+        edit(chat_id,message_id,titles[data]+"\n\nMahsulotni tanlang:",product_keyboard(data,"brand_veral","VERAL BO‘LIMLARI"))
+
+    elif data == "cart":
+        items = cart_items(chat_id)
+
+        if not items:
+            send(
+                chat_id,
+                " SAVATCHA\n\n"
+                "Savatcha hozircha bo‘sh.",
+                main_menu(chat_id)
+            )
+            return
+
+        text = " SIZNING SAVATCHANGIZ\n\n"
+        total = 0
+
+        for item in items:
+            subtotal = item["price"] * item["qty"]
+            total += subtotal
+
+            text += (
+                " " + item["name"] + "\n"
+                " " + str(item["qty"]) + " dona\n"
+                " $" + format(subtotal, ".2f") + "\n\n"
+            )
+
+        text += (
+            "━━━━━━━━━━━━\n"
+            " JAMI: $" + format(total, ".2f")
+        )
+
+        send(
+            chat_id,
+            text,
+            cart_keyboard()
+        )
+
+    elif data == "clear":
+        clear_cart(chat_id)
+
+        selected.pop(chat_id, None)
+        orders.pop(chat_id, None)
+
+        send(
+            chat_id,
+            " Savatcha tozalandi.",
+            main_menu(chat_id)
+        )
+
+    elif data == "cancel_order":
+        orders.pop(chat_id, None)
+        send(chat_id, "Zakaz bekor qilindi.", main_menu())
+
+    elif data == "confirm_order":
+        if chat_id not in orders:
+            return
+        client = get_client(chat_id)
+        items = cart_items(chat_id)
+        if not client or not items:
+            orders.pop(chat_id, None)
+            send(chat_id, "Zakaz uchun ma’lumot yoki savatcha yetarli emas.", main_menu())
+            return
+
+        total = 0
+        admin_text = (
+            "YANGI ZAKAZ!\n\n"
+            "KLIENT: " + client[1] + "\n"
+            "TELEFON: " + client[2] + "\n\n"
+            "MAHSULOTLAR:\n\n"
+        )
+        for item in items:
+            summa = item["price"] * item["qty"]
+            total += summa
+            admin_text += item["name"] + "\n" + str(item["qty"]) + " dona\n$" + format(summa, ".2f") + "\n\n"
+        admin_text += "━━━━━━━━━━━━\nJAMI: $" + format(total, ".2f") + "\n\nTelegram ID: " + str(chat_id)
+
+        save_order_history(chat_id, items)
+        send(ADMIN_ID, admin_text)
+        send(
+            chat_id,
+            "ZAKAZ QABUL QILINDI!\n\n"
+            "Klient: " + client[1] + "\n"
+            "Telefon: " + client[2] + "\n\n"
+            "JAMI: $" + format(total, ".2f") + "\n\n"
+            "Zakazingiz spiskangizga saqlandi.",
+            main_menu(chat_id)
+        )
+        clear_cart(chat_id)
+        orders.pop(chat_id, None)
+
+    elif data == "save_to_list":
+        items = cart_items(chat_id)
+        if not items:
+            send(chat_id, "🛒 Savatcha bo‘sh.", main_menu())
+            return
+        save_to_list(chat_id, items)
+        send(
+            chat_id,
+            "📝 Spiskaga qo‘shildi.\n\nMening spiskam bo‘limidan ko‘rishingiz mumkin.",
+            my_list_keyboard()
+        )
+
+    elif data == "checkout":
+        if not cart_items(chat_id):
+            send(
+                chat_id,
+                " Savatcha bo‘sh."
+            )
+            return
+
+        client = get_client(chat_id)
+        if not client:
+            registration[chat_id] = {"step": "name"}
+            send(chat_id, "Avval registratsiyadan o‘ting.\n\nIsm va familiyangizni yozing:")
+            return
+
+        orders[chat_id] = {"step": "confirm"}
+        send(
+            chat_id,
+            "ZAKAZNI RASMIYLASHTIRISH\n\n"
+            "Klient: " + client[1] + "\n"
+            "Telefon: " + client[2] + "\n\n"
+            "Zakazni yuboraymi?",
+            {"inline_keyboard":[
+                [{"text":"✅ ZAKAZNI TASDIQLASH","callback_data":"confirm_order"}],
+                [{"text":"BEKOR QILISH","callback_data":"cancel_order"}]
+            ]}
+        )
+
+
+# ============================================================
+# MESSAGE HANDLER
+# ============================================================
+
+def handle_message(update):
+    message = update["message"]
+    chat_id = message["chat"]["id"]
+
+    text = message.get("text", "").strip()
+
+    if text == "/start":
+        selected.pop(chat_id, None)
+        orders.pop(chat_id, None)
+
+        client = get_client(chat_id)
+        if not client:
+            registration[chat_id] = {"step": "name"}
+            send(
+                chat_id,
+                "Assalomu alaykum!\n\n"
+                "DUSEL 12-DOKON botidan foydalanish uchun registratsiyadan o‘ting.\n\n"
+                "Ism va familiyangizni yozing:"
+            )
+        else:
+            send(
+                chat_id,
+                "Assalomu alaykum, " + client[1] + "!\n\n"
+                "Siz registratsiyadan o‘tgansiz. Kerakli bo‘limni tanlang.",
+                main_menu(chat_id)
+            )
+        return
+
+    # ========================================================
+    # REGISTRATSIYA
+    # ========================================================
+    if chat_id in registration:
+        step = registration[chat_id]["step"]
+
+        if step == "name":
+            if not text:
+                send(chat_id, "Ism va familiyangizni yozing.")
+                return
+            registration[chat_id]["name"] = text
+            registration[chat_id]["step"] = "phone"
+            send(chat_id, "Telefon raqamingizni yozing:\n\nMasalan: +998901234567")
+            return
+
+        if step == "phone":
+            if not text:
+                send(chat_id, "Telefon raqamingizni yozing.")
+                return
+            name = registration[chat_id]["name"]
+            save_client(chat_id, name, text)
+            registration.pop(chat_id, None)
+            send(
+                chat_id,
+                "Registratsiya muvaffaqiyatli yakunlandi.\n\n"
+                "Ism: " + name + "\n"
+                "Telefon: " + text + "\n\n"
+                "Endi mahsulot tanlashingiz mumkin.",
+                main_menu(chat_id)
+            )
+            return
+
+    # ========================================================
+    # MAHSULOT SONI
+    # ========================================================
+
+    if chat_id in selected:
+        try:
+            qty = int(text)
+
+            if qty <= 0:
+                raise ValueError
+
+        except (ValueError, TypeError):
+            send(
+                chat_id,
+                " Faqat son yozing.\n\n"
+                "Masalan: 5"
+            )
+            return
+
+        product = selected[chat_id]
+
+        add_cart_item(
+            chat_id,
+            product["name"],
+            product["price"],
+            qty
+        )
+
+        selected.pop(chat_id, None)
+
+        summa = product["price"] * qty
+
+        send(
+            chat_id,
+            " SAVATCHAGA QO‘SHILDI!\n\n"
+            " " + product["name"] + "\n"
+            " " + str(qty) + " dona\n"
+            " $" + format(summa, ".2f"),
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": " Yana mahsulot",
+                            "callback_data": "categories"
+                        }
+                    ],
+                    [
+                        {
+                            "text": " SAVATCHANI KO‘RISH",
+                            "callback_data": "cart"
+                        }
+                    ]
+                ]
+            }
+        )
+        return
+
+    # ========================================================
+    # ZAKAZNI TASDIQLASH CALLBACK ORQALI BAJARILADI
+    # ========================================================
+
+    if chat_id in orders:
+        send(chat_id, "Zakazni tasdiqlash uchun tugmani bosing.")
+        return
+
+    # ========================================================
+    # BOSHQA XABAR
+    # ========================================================
+
+    send(
+        chat_id,
+        " Salom!\n\n"
+        "Mahsulot tanlash uchun "
+        " MAHSULOTLAR tugmasini bosing.",
+        main_menu(chat_id)
+    )
+
+
+# ============================================================
+# UPDATE PROCESSOR
+# ============================================================
+
+def process_update(update):
+    if "callback_query" in update:
+        handle_callback(update)
+        return
+
+    if "message" in update:
+        handle_message(update)
+
+
+# ============================================================
+# 24/7 LONG POLLING LOOP
+# ============================================================
+
+def run_bot():
+    offset = 0
+
+    # Eski webhook bo'lsa, long polling ishlamasligi mumkin.
+    try:
+        api("deleteWebhook", {"drop_pending_updates": "false"})
+        logging.info("Webhook o'chirildi. Long polling ishga tushadi.")
+    except Exception as e:
+        logging.warning("Webhookni o'chirishda ogohlantirish: %s", e)
+
+    # Token tekshirish
+    me = api("getMe")
+    bot_username = me["result"].get("username", "unknown")
+    logging.info("Bot ishga tushdi: @%s", bot_username)
+    logging.info("Admin ID: %s", ADMIN_ID)
+    logging.info("Database: %s", DB_FILE)
+
+    retry_delay = 3
+
+    while running:
+        try:
+            result = api(
+                "getUpdates",
+                {
+                    "offset": offset,
+                    "timeout": 50,
+                    "allowed_updates": json.dumps(
+                        ["message", "callback_query"]
+                    )
+                }
+            )
+
+            retry_delay = 3
+
+            for update in result.get("result", []):
+                offset = update["update_id"] + 1
+
+                try:
+                    process_update(update)
+                except Exception:
+                    logging.exception(
+                        "Update qayta ishlashda xato"
+                    )
+
+        except urllib.error.HTTPError as e:
+            logging.error(
+                "HTTP xato: %s. %s soniyadan keyin qayta urinadi.",
+                e.code,
+                retry_delay
+            )
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
+
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            OSError
+        ) as e:
+            logging.error(
+                "Internet/ulanish xatosi: %s. "
+                "%s soniyadan keyin qayta urinadi.",
+                e,
+                retry_delay
+            )
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
+
+        except Exception:
+            logging.exception(
+                "Asosiy loopda kutilmagan xato. "
+                "%s soniyadan keyin qayta urinadi.",
+                retry_delay
+            )
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
+
+    logging.info("Bot to'xtadi.")
+
+
+if __name__ == "__main__":
+    try:
+        run_bot()
+    finally:
+        db.close()
